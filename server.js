@@ -4,8 +4,17 @@ import cors from 'cors';
 const app = express();
 app.use(cors());
 
-// MASUKIN URL CLOUDFLARE WORKER LO DI SINI
-const PROXY = "https://jembatan1.raditgaring1.workers.dev"; 
+// Vercel bertindak sebagai proxy langsung ke MangaDex
+async function fetchMangaDex(path) {
+    const url = "https://api.mangadex.org" + path;
+    const res = await fetch(url, {
+        headers: {
+            'User-Agent': 'KazeKomik/1.0 (https://kaze-one.vercel.app)',
+            'Accept': 'application/json'
+        }
+    });
+    return await res.json();
+}
 
 // ==========================================
 // 1. TAMPILAN WEB (HTML)
@@ -16,7 +25,7 @@ const htmlContent = `
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Kaze Komik (MangaDex)</title>
+  <title>Kaze Komik</title>
   <style>
     body { background: #121212; color: white; font-family: sans-serif; padding: 15px; }
     h1 { color: #ff3d00; text-align: center; }
@@ -48,10 +57,13 @@ const htmlContent = `
     <div id="reader-img"></div>
   </div>
   <script>
+    // Gambar langsung dari MangaDex (MangaDex ngebolehin hotlink cover)
+    const IMG_PROXY = "https://uploads.mangadex.org/covers/";
+
     function renderCards(results) {
       const grid = document.getElementById('grid');
       grid.innerHTML = '';
-      if(!results || results.length === 0) { grid.innerHTML = '<p style="color:#ff3d00; text-align:center; grid-column:1/-1;">Komik nggak nemu atau limit.</p>'; return; }
+      if(!results || results.length === 0) { grid.innerHTML = '<p style="color:#ff3d00; text-align:center; grid-column:1/-1;">Data kosong.</p>'; return; }
       
       results.forEach(m => {
         const card = document.createElement('div');
@@ -60,7 +72,7 @@ const htmlContent = `
         
         let title = m.attributes.title.en || m.attributes.title['ja-ro'] || Object.values(m.attributes.title)[0] || 'Tanpa Judul';
         let coverRel = m.relationships.find(r => r.type === 'cover_art');
-        let imgUrl = coverRel ? PROXY + "/?url=" + encodeURIComponent('https://uploads.mangadex.org/covers/' + m.id + '/' + coverRel.attributes.fileName + '.256.jpg') : 'https://via.placeholder.com/150x200/333/fff?text=No+Cover';
+        let imgUrl = coverRel ? IMG_PROXY + m.id + '/' + coverRel.attributes.fileName + '.256.jpg' : 'https://via.placeholder.com/150x200/333/fff?text=No+Cover';
         
         card.innerHTML = '<img src="' + imgUrl + '" loading="lazy"><p>' + title + '</p>';
         grid.appendChild(card);
@@ -71,9 +83,8 @@ const htmlContent = `
       try {
         const res = await fetch('/api/manga');
         const data = await res.json();
-        if(data.result === 'error') throw new Error("Limit");
         renderCards(data.data);
-      } catch(e) { document.getElementById('grid').innerHTML = '<p style="color:red; text-align:center; grid-column:1/-1;">Sistem sibuk. Tunggu 1 menit lalu refresh.</p>'; }
+      } catch(e) { document.getElementById('grid').innerHTML = '<p style="color:red; text-align:center; grid-column:1/-1;">Sistem sibuk. Refresh bentar lagi.</p>'; }
     };
 
     async function searchManga() {
@@ -104,9 +115,17 @@ const htmlContent = `
         let chRes = await fetch('/api/chapters?id=' + id);
         let chData = await chRes.json();
         
-        if(!chData.data || chData.data.length === 0) { list.innerHTML = '<p>Belum ada chapter Indo/Inggris.</p>'; return; }
+        if(!chData.data || chData.data.length === 0) { list.innerHTML = '<p>Belum ada chapter.</p>'; return; }
         
-        chData.data.forEach(ch => {
+        // Filter biar nggak duplikat
+        let seen = new Set();
+        let validCh = chData.data.filter(ch => {
+            if(!ch.attributes.chapter || seen.has(ch.attributes.chapter)) return false;
+            seen.add(ch.attributes.chapter);
+            return true;
+        });
+
+        validCh.forEach(ch => {
           const div = document.createElement('div');
           div.className = 'ch-item';
           div.innerText = 'Chapter ' + ch.attributes.chapter;
@@ -137,7 +156,8 @@ const htmlContent = `
         
         pages.forEach(file => {
           const img = document.createElement('img');
-          img.src = PROXY + "/?url=" + encodeURIComponent(server + '/' + folder + '/' + hash + '/' + file);
+          // Gambar chapter langsung ke server MangaDex
+          img.src = server + '/' + folder + '/' + hash + '/' + file;
           img.loading = 'lazy';
           container.appendChild(img);
         });
@@ -149,17 +169,8 @@ const htmlContent = `
 `;
 
 // ==========================================
-// 2. API MANGADEX (LEWAT PROXY)
+// 2. API MANGADEX (LANGSUNG)
 // ==========================================
-
-// Fungsi bantuan buat nembak MangaDex lewat Cloudflare
-async function fetchMangaDex(path) {
-    const url = PROXY + "/?url=" + encodeURIComponent("https://api.mangadex.org" + path);
-    const res = await fetch(url);
-    return await res.json();
-}
-
-// Ambil List Manga
 app.get('/api/manga', async (req, res) => {
   try {
     const data = await fetchMangaDex('/manga?limit=24&includes[]=cover_art&order[followedCount]=desc&contentRating[]=safe&contentRating[]=suggestive');
@@ -167,7 +178,6 @@ app.get('/api/manga', async (req, res) => {
   } catch (error) { res.status(500).json({ error: error.message }); }
 });
 
-// Search Manga
 app.get('/api/search', async (req, res) => {
   try {
     const { q } = req.query;
@@ -176,7 +186,6 @@ app.get('/api/search', async (req, res) => {
   } catch (error) { res.status(500).json({ error: error.message }); }
 });
 
-// Detail Manga
 app.get('/api/details', async (req, res) => {
   try {
     const { id } = req.query;
@@ -185,7 +194,6 @@ app.get('/api/details', async (req, res) => {
   } catch (error) { res.status(500).json({ error: error.message }); }
 });
 
-// List Chapter
 app.get('/api/chapters', async (req, res) => {
   try {
     const { id } = req.query;
@@ -194,7 +202,6 @@ app.get('/api/chapters', async (req, res) => {
   } catch (error) { res.status(500).json({ error: error.message }); }
 });
 
-// Ambil Gambar Chapter
 app.get('/api/pages', async (req, res) => {
   try {
     const { chapterId } = req.query;
