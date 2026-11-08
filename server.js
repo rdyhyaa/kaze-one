@@ -4,8 +4,11 @@ import cors from 'cors';
 const app = express();
 app.use(cors());
 
+// MASUKIN URL CLOUDFLARE WORKER LO DI SINI
+const PROXY = "https://jembatan1.raditgaring1.workers.dev"; 
+
 // ==========================================
-// 1. KODE TAMPILAN WEB
+// 1. TAMPILAN WEB (HTML)
 // ==========================================
 const htmlContent = `
 <!DOCTYPE html>
@@ -13,23 +16,20 @@ const htmlContent = `
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Kaze Komik</title>
+  <title>Kaze Komik (MangaDex)</title>
   <style>
     body { background: #121212; color: white; font-family: sans-serif; padding: 15px; }
     h1 { color: #ff3d00; text-align: center; }
     #search-box { width: 100%; padding: 12px; border-radius: 25px; border: none; margin-bottom: 15px; outline: none; }
-    #grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(105px, 1fr)); gap: 10px; }
+    #grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(100px, 1fr)); gap: 10px; }
     .card { background: #1e1e1e; padding: 8px; border-radius: 8px; cursor: pointer; }
-    .card img { width: 100%; height: 150px; object-fit: cover; border-radius: 5px; }
-    .card p { font-size: 12px; text-align: center; margin: 8px 0 0 0; font-weight: bold; line-height: 1.3; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;}
-    #detail { display: none; margin-top: 20px; background: #1e1e1e; padding: 15px; border-radius: 10px; }
+    .card img { width: 100%; height: 140px; object-fit: cover; border-radius: 5px; }
+    .card p { font-size: 12px; text-align: center; margin: 8px 0 0 0; font-weight: bold; line-height: 1.2; }
+    #detail, #reader { display: none; margin-top: 20px; }
     .back { background: #ff3d00; color: white; border: none; padding: 10px 15px; border-radius: 5px; margin-bottom: 15px; cursor: pointer; font-weight: bold; }
-    .loading { text-align: center; color: #888; padding: 20px; }
-    .info { display: flex; gap: 15px; margin-bottom: 15px;}
-    .info img { width: 110px; height: 160px; border-radius: 8px; object-fit: cover; }
-    .info-data h2 { margin-bottom: 5px; font-size: 18px; }
-    .info-data p { color: #ff3d00; font-weight: bold; }
-    .synopsis { font-size: 13px; color: #ccc; line-height: 1.5; }
+    .ch-item { background: #1e1e1e; padding: 15px; margin-bottom: 8px; border-radius: 8px; cursor: pointer; font-weight: bold; }
+    #reader img { width: 100%; display: block; margin-bottom: 2px; }
+    .loading { text-align: center; color: #888; padding: 20px; width: 100%;}
   </style>
 </head>
 <body>
@@ -40,85 +40,108 @@ const htmlContent = `
   </div>
   <div id="detail">
     <button class="back" onclick="document.getElementById('detail').style.display='none'; document.getElementById('home').style.display='block';">← Kembali</button>
-    <div class="info">
-      <img id="d-img" src="">
-      <div class="info-data">
-        <h2 id="d-title"></h2>
-        <p id="d-score"></p>
-      </div>
-    </div>
-    <div class="synopsis" id="d-synopsis"></div>
+    <h2 id="detail-title" style="margin-bottom: 15px;"></h2>
+    <div id="chapter-list"></div>
   </div>
-
+  <div id="reader">
+    <button class="back" onclick="document.getElementById('reader').style.display='none'; document.getElementById('detail').style.display='block';">← Tutup</button>
+    <div id="reader-img"></div>
+  </div>
   <script>
-    // Fungsi nampilin kartu
     function renderCards(results) {
       const grid = document.getElementById('grid');
       grid.innerHTML = '';
-      
-      // Cek apakah data valid
-      if(!results || results.length === 0) { 
-        grid.innerHTML = '<p style="color:#ff3d00; text-align:center; width:100%;">Data komik kosong atau API limit.</p>'; 
-        return; 
-      }
+      if(!results || results.length === 0) { grid.innerHTML = '<p style="color:#ff3d00; text-align:center; grid-column:1/-1;">Komik nggak nemu atau limit.</p>'; return; }
       
       results.forEach(m => {
         const card = document.createElement('div');
         card.className = 'card';
-        card.onclick = () => openDetail(m);
+        card.onclick = () => openDetail(m.id);
         
-        let imgUrl = 'https://via.placeholder.com/150x200/333/fff?text=No+Cover';
-        if (m.images && m.images.jpg && m.images.jpg.image_url) {
-            imgUrl = m.images.jpg.image_url;
-        }
+        let title = m.attributes.title.en || m.attributes.title['ja-ro'] || Object.values(m.attributes.title)[0] || 'Tanpa Judul';
+        let coverRel = m.relationships.find(r => r.type === 'cover_art');
+        let imgUrl = coverRel ? PROXY + "/?url=" + encodeURIComponent('https://uploads.mangadex.org/covers/' + m.id + '/' + coverRel.attributes.fileName + '.256.jpg') : 'https://via.placeholder.com/150x200/333/fff?text=No+Cover';
         
-        card.innerHTML = '<img src="' + imgUrl + '" loading="lazy"><p>' + m.title + '</p>';
+        card.innerHTML = '<img src="' + imgUrl + '" loading="lazy"><p>' + title + '</p>';
         grid.appendChild(card);
       });
     }
 
-    // Ambil data awal pas dibuka
     window.onload = async () => {
       try {
         const res = await fetch('/api/manga');
         const data = await res.json();
-        // Jikan API ngasih data di dalam properti 'data'
+        if(data.result === 'error') throw new Error("Limit");
         renderCards(data.data);
-      } catch(e) { 
-        document.getElementById('grid').innerHTML = '<p style="color:red; text-align:center;">Gagal konek ke server.</p>'; 
-      }
+      } catch(e) { document.getElementById('grid').innerHTML = '<p style="color:red; text-align:center; grid-column:1/-1;">Sistem sibuk. Tunggu 1 menit lalu refresh.</p>'; }
     };
 
-    // Fitur Search
     async function searchManga() {
       const q = document.getElementById('search-box').value;
-      if(!q) return;
-      
       document.getElementById('grid').innerHTML = '<p class="loading">Mencari...</p>';
       try {
         const res = await fetch('/api/search?q=' + encodeURIComponent(q));
         const data = await res.json();
         renderCards(data.data);
-      } catch(e) { 
-        document.getElementById('grid').innerHTML = '<p style="color:red; text-align:center;">Gagal mencari.</p>'; 
-      }
+      } catch(e) { document.getElementById('grid').innerHTML = '<p style="color:red; text-align:center; grid-column:1/-1;">Gagal mencari.</p>'; }
     }
 
-    // Buka Detail
-    function openDetail(manga) {
+    async function openDetail(id) {
       document.getElementById('home').style.display = 'none';
       document.getElementById('detail').style.display = 'block';
+      document.getElementById('detail-title').innerText = 'Memuat chapter...';
+      const list = document.getElementById('chapter-list');
+      list.innerHTML = '';
       window.scrollTo(0,0);
       
-      let imgUrl = 'https://via.placeholder.com/150x200/333/fff?text=No+Cover';
-      if (manga.images && manga.images.jpg && manga.images.jpg.image_url) {
-          imgUrl = manga.images.jpg.image_url;
-      }
+      try {
+        const res = await fetch('/api/details?id=' + id);
+        const data = await res.json();
+        
+        let title = data.data.attributes.title.en || Object.values(data.data.attributes.title)[0];
+        document.getElementById('detail-title').innerText = title;
+        
+        let chRes = await fetch('/api/chapters?id=' + id);
+        let chData = await chRes.json();
+        
+        if(!chData.data || chData.data.length === 0) { list.innerHTML = '<p>Belum ada chapter Indo/Inggris.</p>'; return; }
+        
+        chData.data.forEach(ch => {
+          const div = document.createElement('div');
+          div.className = 'ch-item';
+          div.innerText = 'Chapter ' + ch.attributes.chapter;
+          div.onclick = () => openChapter(ch.id);
+          list.appendChild(div);
+        });
+      } catch(e) { list.innerHTML = '<p style="color:red;">Gagal memuat detail.</p>'; }
+    }
+
+    async function openChapter(chapterId) {
+      document.getElementById('detail').style.display = 'none';
+      document.getElementById('reader').style.display = 'block';
+      const container = document.getElementById('reader-img');
+      container.innerHTML = '<p class="loading">Memuat gambar...</p>';
+      window.scrollTo(0,0);
       
-      document.getElementById('d-img').src = imgUrl;
-      document.getElementById('d-title').innerText = manga.title;
-      document.getElementById('d-score').innerText = '⭐ ' + (manga.score || 'Belum ada rating') + ' | Status: ' + (manga.status || '-');
-      document.getElementById('d-synopsis').innerText = manga.synopsis || 'Tidak ada sinopsis.';
+      try {
+        const res = await fetch('/api/pages?chapterId=' + chapterId);
+        const data = await res.json();
+        
+        let server = data.baseUrl;
+        let hash = data.chapter.hash;
+        let pages = data.chapter.dataSaver || data.chapter.data;
+        let folder = data.chapter.dataSaver ? 'data-saver' : 'data';
+        
+        container.innerHTML = '';
+        if(!pages || pages.length === 0) { container.innerHTML = '<p style="color:red;">Gambar nggak ada.</p>'; return; }
+        
+        pages.forEach(file => {
+          const img = document.createElement('img');
+          img.src = PROXY + "/?url=" + encodeURIComponent(server + '/' + folder + '/' + hash + '/' + file);
+          img.loading = 'lazy';
+          container.appendChild(img);
+        });
+      } catch(e) { container.innerHTML = '<p style="color:red;">Gagal memuat gambar.</p>'; }
     }
   </script>
 </body>
@@ -126,24 +149,56 @@ const htmlContent = `
 `;
 
 // ==========================================
-// 2. KODE API (JIKAN / MYANIMELIST)
+// 2. API MANGADEX (LEWAT PROXY)
 // ==========================================
-const JIKAN_API = "https://api.jikan.moe/v4";
 
+// Fungsi bantuan buat nembak MangaDex lewat Cloudflare
+async function fetchMangaDex(path) {
+    const url = PROXY + "/?url=" + encodeURIComponent("https://api.mangadex.org" + path);
+    const res = await fetch(url);
+    return await res.json();
+}
+
+// Ambil List Manga
 app.get('/api/manga', async (req, res) => {
   try {
-    // Ambil 20 komik terpopuler
-    const response = await fetch(`${JIKAN_API}/top/manga?limit=20`);
-    const data = await response.json();
+    const data = await fetchMangaDex('/manga?limit=24&includes[]=cover_art&order[followedCount]=desc&contentRating[]=safe&contentRating[]=suggestive');
     res.json(data);
   } catch (error) { res.status(500).json({ error: error.message }); }
 });
 
+// Search Manga
 app.get('/api/search', async (req, res) => {
   try {
     const { q } = req.query;
-    const response = await fetch(`${JIKAN_API}/manga?q=${encodeURIComponent(q)}&limit=20`);
-    const data = await response.json();
+    const data = await fetchMangaDex(`/manga?limit=24&title=${encodeURIComponent(q)}&includes[]=cover_art`);
+    res.json(data);
+  } catch (error) { res.status(500).json({ error: error.message }); }
+});
+
+// Detail Manga
+app.get('/api/details', async (req, res) => {
+  try {
+    const { id } = req.query;
+    const data = await fetchMangaDex(`/manga/${id}?includes[]=cover_art`);
+    res.json(data);
+  } catch (error) { res.status(500).json({ error: error.message }); }
+});
+
+// List Chapter
+app.get('/api/chapters', async (req, res) => {
+  try {
+    const { id } = req.query;
+    const data = await fetchMangaDex(`/manga/${id}/feed?limit=500&translatedLanguage[]=en&translatedLanguage[]=id&order[chapter]=asc`);
+    res.json(data);
+  } catch (error) { res.status(500).json({ error: error.message }); }
+});
+
+// Ambil Gambar Chapter
+app.get('/api/pages', async (req, res) => {
+  try {
+    const { chapterId } = req.query;
+    const data = await fetchMangaDex(`/at-home/server/${chapterId}`);
     res.json(data);
   } catch (error) { res.status(500).json({ error: error.message }); }
 });
